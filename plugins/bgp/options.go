@@ -38,6 +38,8 @@ func NewPlugin(opts ...Option) *BgpPlugin {
 	//p.Watcher = watchers
 	//p.Publisher = writers
 
+	p.KVStore = &etcd.DefaultPlugin
+
 	p.Setup()
 
 	for _, o := range opts {
