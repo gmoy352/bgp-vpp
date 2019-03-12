@@ -45,8 +45,10 @@ type Deps struct {
 	//Scheduler    *kvscheduler.Scheduler
 	ETCDDataSync *kvdbsync.Plugin
 	BGPServer    *gobgp.BgpServer
-	KVScheduler  kvs.KVScheduler
-	KVStore      keyval.KvProtoPlugin
+
+	KVScheduler kvs.KVScheduler
+	KVStore     keyval.KvProtoPlugin
+
 	//interface needed to write to ETCD - initialized in Init()
 	//Watcher   datasync.KeyValProtoWatcher
 	//Publisher datasync.KeyProtoValWriter
@@ -72,10 +74,11 @@ func (p *BgpPlugin) Init() error {
 	p.KVScheduler.RegisterKVDescriptor(pd)*/
 
 	p.watchCloser = make(chan string)
-	watcher := p.KVStore.NewWatcher(nodePrefix)
+	watcher := p.Deps.KVStore.NewWatcher(nodePrefix)
 	err := watcher.Watch(p.onChange, p.watchCloser, "")
 	if err != nil {
 		return err
+
 	}
 	log.Println("Hello World!")
 	return nil
@@ -124,7 +127,7 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	})
 	attrs := []*any.Any{a1, a2}
 
-	_, err6 := p.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
+	_, err6 := p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
 		Path: &bgp_api.Path{
 			Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
 			Nlri:   nlri,
