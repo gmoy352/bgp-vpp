@@ -70,8 +70,9 @@ func (p *BgpPlugin) Init() error {
 	p.Deps.KVScheduler.RegisterKVDescriptor(gd)
 
 	// register descriptor for bgp peer config
-	/*pd := descriptor.NewPeerConfDescriptor(p.Log, p.BGPServer)
-	p.KVScheduler.RegisterKVDescriptor(pd)*/
+
+	pd := descriptor.NewPeerConfDescriptor(p.Log, p.BGPServer)
+	p.KVScheduler.RegisterKVDescriptor(pd)
 
 	p.watchCloser = make(chan string)
 	watcher := p.Deps.KVStore.NewWatcher(nodePrefix)
