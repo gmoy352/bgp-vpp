@@ -96,6 +96,7 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	if err := resp.GetValue(value); err != nil {
 		log.Printf("get value error: %v", err)
 	}
+	type:resp.GetChangeType()
 	ip := value.IpAddresses[0]
 	// NEED TO split  /24 FROM IP
 	ipParts := strings.Split(ip, "/")
@@ -162,7 +163,6 @@ func getNodeInfo(client *remote.HTTPClient, base string, cmd string) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-
 	var out bytes.Buffer
 	err = json.Indent(&out, b, "", "  ")
 	return out.Bytes(), err
