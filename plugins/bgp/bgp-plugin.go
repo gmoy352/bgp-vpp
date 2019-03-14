@@ -15,7 +15,6 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/ligato/cn-infra/datasync"
-	"github.com/ligato/cn-infra/datasync/kvdbsync"
 	"github.com/ligato/cn-infra/db/keyval"
 	//"strconv"
 
@@ -23,7 +22,6 @@ import (
 	"github.com/ligato/cn-infra/infra"
 	"github.com/ligato/cn-infra/rpc/rest"
 	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
-	"github.com/ligato/vpp-agent/plugins/orchestrator"
 	bgp_api "github.com/osrg/gobgp/api"
 	gobgp "github.com/osrg/gobgp/pkg/server"
 	"io/ioutil"
@@ -40,34 +38,27 @@ type BgpPlugin struct {
 type Deps struct {
 	//plugins - initialized in options.go NewPlugin()
 	infra.PluginDeps
-	Rest         *rest.Plugin
-	Orchestrator *orchestrator.Plugin
-	//Scheduler    *kvscheduler.Scheduler
-	ETCDDataSync *kvdbsync.Plugin
-	BGPServer    *gobgp.BgpServer
-
+	Rest        *rest.Plugin
+	BGPServer   *gobgp.BgpServer
 	KVScheduler kvs.KVScheduler
 	KVStore     keyval.KvProtoPlugin
-
-	//interface needed to write to ETCD - initialized in Init()
-	//Watcher   datasync.KeyValProtoWatcher
-	//Publisher datasync.KeyProtoValWriter
 }
 
 const nodePrefix = "/vnf-agent/contiv-ksr/allocatedIds/"
 const getIpamDataCmd = "contiv/v1/ipam"
 
 func (p *BgpPlugin) String() string {
-	return "HelloWorld"
+	return "Starting BgpPlugin Application"
 }
 func (p *BgpPlugin) Init() error {
-	if p.Deps.BGPServer == nil {
-		p.Deps.BGPServer = gobgp.NewBgpServer()
+	if p.BGPServer == nil {
+		p.BGPServer = gobgp.NewBgpServer()
+		go p.BGPServer.Serve()
 	}
 
 	// register descriptor for bgp global config
 	gd := descriptor.NewGlobalConfDescriptor(p.Log, p.BGPServer)
-	p.Deps.KVScheduler.RegisterKVDescriptor(gd)
+	p.KVScheduler.RegisterKVDescriptor(gd)
 
 	// register descriptor for bgp peer config
 
@@ -81,11 +72,10 @@ func (p *BgpPlugin) Init() error {
 		return err
 
 	}
-	log.Println("Hello World!")
 	return nil
 }
 func (p *BgpPlugin) Close() error {
-	log.Println("Goodbye World!")
+	log.Println("Closing BgpPlugin Application.")
 	return nil
 }
 
@@ -96,7 +86,7 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	if err := resp.GetValue(value); err != nil {
 		log.Printf("get value error: %v", err)
 	}
-	type:resp.GetChangeType()
+	changeType := resp.GetChangeType()
 	ip := value.IpAddresses[0]
 	// NEED TO split  /24 FROM IP
 	ipParts := strings.Split(ip, "/")
