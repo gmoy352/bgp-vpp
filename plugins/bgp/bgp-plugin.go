@@ -16,6 +16,8 @@ import (
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/ligato/cn-infra/datasync"
 	"github.com/ligato/cn-infra/db/keyval"
+	"github.com/ligato/cn-infra/logging"
+
 	//"strconv"
 
 	//"github.com/ligato/cn-infra/db/keyval/etcd"
@@ -79,33 +81,49 @@ func (p *BgpPlugin) Close() error {
 	return nil
 }
 
-//tutorial says keyval.protowatchresp
+//tutorial says keyval.protowatchresp but i couldnt find it
+//in the  cn-infra/db/keyval/proto_watcher_api.go in our vendor folder there isnt a ProtoWatchResp
+// but on the github for cn infra, there is one
 func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
-	key := resp.GetKey()
+	//key := resp.GetKey()
+
+	//Getting
 	value := new(vppnode.VppNode)
-	if err := resp.GetValue(value); err != nil {
-		log.Printf("get value error: %v", err)
-	}
 	changeType := resp.GetChangeType()
+	if changeType == datasync.Delete {
+		if prevValExist, err := resp.GetPrevValue(value); err != nil {
+			logging.Errorf("get value error: %v", err)
+		} else if !prevValExist {
+			logging.Errorf("Delete and Previous Value Does not Exist")
+		}
+	} else {
+		if err := resp.GetValue(value); err != nil {
+			logging.Errorf("get value error: %v", err)
+		}
+	}
 	ip := value.IpAddresses[0]
-	// NEED TO split  /24 FROM IP
 	ipParts := strings.Split(ip, "/")
 	ip = ipParts[0]
 	//prefixlen, err4 := strconv.Atoi(ipParts[1])
 
-	// need to find out how to get client
+	client, err := remote.CreateHTTPClient("")
+	if err != nil {
+		logging.Error("create http client error: %v", err)
+	}
+
+	//Getting Ipam Info
 	b, err2 := getNodeInfo(client, ip, getIpamDataCmd)
 	if err2 != nil {
-		log.Printf("getnodeinfo error: %v", err2)
+		logging.Errorf("getnodeinfo error: %v", err2)
 	}
 
 	ipam := ipv4net.IPAMData{}
 	err3 := json.Unmarshal(b, &ipam)
 	if err3 != nil {
-		log.Printf("unmarshal error: %v", err3)
+		logging.Errorf("unmarshal error: %v", err3)
 	}
-	// for subnet use   ipam.PodSubnetThisNode
 
+	//Setting Route info
 	nlri, _ := ptypes.MarshalAny(&bgp_api.IPAddressPrefix{
 		Prefix:    ipam.PodSubnetThisNode,
 		PrefixLen: 24,
@@ -118,17 +136,30 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 		NextHop: ip,
 	})
 	attrs := []*any.Any{a1, a2}
-
-	_, err6 := p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
-		Path: &bgp_api.Path{
-			Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
-			Nlri:   nlri,
-			Pattrs: attrs,
-		},
-	})
-
-	if err6 != nil {
-		log.Printf("unmarshal error: %v", err6)
+	if changeType == datasync.Put {
+		_, err6 := p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
+			Path: &bgp_api.Path{
+				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
+				Nlri:   nlri,
+				Pattrs: attrs,
+			},
+		})
+		if err6 != nil {
+			logging.Errorf("AddPath: %v", err6)
+		}
+	} else if changeType == datasync.Delete {
+		err7 := p.Deps.BGPServer.DeletePath(context.Background(), &bgp_api.DeletePathRequest{
+			Path: &bgp_api.Path{
+				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
+				Nlri:   nlri,
+				Pattrs: attrs,
+			},
+		})
+		if err7 != nil {
+			logging.Errorf("AddPath: %v", err7)
+		}
+	} else {
+		logging.Errorf("GetChangeType: %v", changeType)
 	}
 
 }
