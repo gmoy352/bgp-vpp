@@ -87,40 +87,46 @@ func (p *BgpPlugin) Close() error {
 func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	//key := resp.GetKey()
 
-	//Getting
+	//Getting ip
 	value := new(vppnode.VppNode)
 	changeType := resp.GetChangeType()
 	if changeType == datasync.Delete {
 		if prevValExist, err := resp.GetPrevValue(value); err != nil {
 			logging.Errorf("get value error: %v", err)
+			return
 		} else if !prevValExist {
 			logging.Errorf("Delete and Previous Value Does not Exist")
+			return
 		}
 	} else {
 		if err := resp.GetValue(value); err != nil {
 			logging.Errorf("get value error: %v", err)
+			return
 		}
 	}
 	ip := value.IpAddresses[0]
 	ipParts := strings.Split(ip, "/")
 	ip = ipParts[0]
-	//prefixlen, err4 := strconv.Atoi(ipParts[1])
+	//prefixlen, err := strconv.Atoi(ipParts[1])
 
 	client, err := remote.CreateHTTPClient("")
 	if err != nil {
 		logging.Error("create http client error: %v", err)
+		return
 	}
 
 	//Getting Ipam Info
-	b, err2 := getNodeInfo(client, ip, getIpamDataCmd)
-	if err2 != nil {
-		logging.Errorf("getnodeinfo error: %v", err2)
+	b, err := getNodeInfo(client, ip, getIpamDataCmd)
+	if err != nil {
+		logging.Errorf("getnodeinfo error: %v", err)
+		return
 	}
 
 	ipam := ipv4net.IPAMData{}
-	err3 := json.Unmarshal(b, &ipam)
-	if err3 != nil {
-		logging.Errorf("unmarshal error: %v", err3)
+	err = json.Unmarshal(b, &ipam)
+	if err != nil {
+		logging.Errorf("unmarshal error: %v", err)
+		return
 	}
 
 	//Setting Route info
@@ -136,29 +142,30 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 		NextHop: ip,
 	})
 	attrs := []*any.Any{a1, a2}
-	if changeType == datasync.Put {
-		_, err6 := p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
+	switch changeType {
+	case datasync.Put:
+		_, err := p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
 			Path: &bgp_api.Path{
 				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
 				Nlri:   nlri,
 				Pattrs: attrs,
 			},
 		})
-		if err6 != nil {
-			logging.Errorf("AddPath: %v", err6)
+		if err != nil {
+			logging.Errorf("AddPath: %v", err)
 		}
-	} else if changeType == datasync.Delete {
-		err7 := p.Deps.BGPServer.DeletePath(context.Background(), &bgp_api.DeletePathRequest{
+	case datasync.Delete:
+		err := p.Deps.BGPServer.DeletePath(context.Background(), &bgp_api.DeletePathRequest{
 			Path: &bgp_api.Path{
 				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
 				Nlri:   nlri,
 				Pattrs: attrs,
 			},
 		})
-		if err7 != nil {
-			logging.Errorf("AddPath: %v", err7)
+		if err != nil {
+			logging.Errorf("AddPath: %v", err)
 		}
-	} else {
+	default:
 		logging.Errorf("GetChangeType: %v", changeType)
 	}
 
