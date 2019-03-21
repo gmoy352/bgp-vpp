@@ -16,8 +16,6 @@ import (
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/ligato/cn-infra/datasync"
 	"github.com/ligato/cn-infra/db/keyval"
-	"github.com/ligato/cn-infra/logging"
-
 	//"strconv"
 
 	//"github.com/ligato/cn-infra/db/keyval/etcd"
@@ -92,15 +90,15 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	changeType := resp.GetChangeType()
 	if changeType == datasync.Delete {
 		if prevValExist, err := resp.GetPrevValue(value); err != nil {
-			logging.Errorf("get value error: %v", err)
+			p.Log.Errorf("get value error: %v", err)
 			return
 		} else if !prevValExist {
-			logging.Errorf("Delete and Previous Value Does not Exist")
+			p.Log.Errorf("Delete and Previous Value Does not Exist")
 			return
 		}
 	} else {
 		if err := resp.GetValue(value); err != nil {
-			logging.Errorf("get value error: %v", err)
+			p.Log.Errorf("get value error: %v", err)
 			return
 		}
 	}
@@ -111,21 +109,21 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 
 	client, err := remote.CreateHTTPClient("")
 	if err != nil {
-		logging.Error("create http client error: %v", err)
+		p.Log.Error("create http client error: %v", err)
 		return
 	}
 
 	//Getting Ipam Info
 	b, err := getNodeInfo(client, ip, getIpamDataCmd)
 	if err != nil {
-		logging.Errorf("getnodeinfo error: %v", err)
+		p.Log.Errorf("getnodeinfo error: %v", err)
 		return
 	}
 
 	ipam := ipv4net.IPAMData{}
 	err = json.Unmarshal(b, &ipam)
 	if err != nil {
-		logging.Errorf("unmarshal error: %v", err)
+		p.Log.Errorf("unmarshal error: %v", err)
 		return
 	}
 
@@ -144,6 +142,7 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	attrs := []*any.Any{a1, a2}
 	switch changeType {
 	case datasync.Put:
+		p.Log.Infof("Put operation with NLRI: %v and Next Hop: %v", nlri, ip)
 		_, err := p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
 			Path: &bgp_api.Path{
 				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
@@ -152,9 +151,10 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 			},
 		})
 		if err != nil {
-			logging.Errorf("AddPath: %v", err)
+			p.Log.Errorf("AddPath: %v", err)
 		}
 	case datasync.Delete:
+		p.Log.Infof("Deleting Path with NLRI: %v", nlri)
 		err := p.Deps.BGPServer.DeletePath(context.Background(), &bgp_api.DeletePathRequest{
 			Path: &bgp_api.Path{
 				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
@@ -163,10 +163,10 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 			},
 		})
 		if err != nil {
-			logging.Errorf("AddPath: %v", err)
+			p.Log.Errorf("AddPath: %v", err)
 		}
 	default:
-		logging.Errorf("GetChangeType: %v", changeType)
+		p.Log.Errorf("GetChangeType: %v", changeType)
 	}
 
 }
