@@ -3,22 +3,23 @@ package bgp
 //go:generate protoc --proto_path=model --proto_path=$GOPATH/src --gogo_out=model model/bgp.proto
 //go:generate descriptor-adapter --descriptor-name GlobalConf --value-type *model.GlobalConf --import "model" --output-dir "descriptor"
 //go:generate descriptor-adapter --descriptor-name PeerConf --value-type *model.PeerConf --import "model" --output-dir "descriptor"
+
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/contiv/bgp-vpp/plugins/bgp/descriptor"
-	"github.com/contiv/vpp/plugins/ipv4net"
+	"github.com/contiv/vpp/plugins/crd/cache/telemetrymodel"
+	"strconv"
+
+	"github.com/contiv/vpp/plugins/contiv/model/node"
 	"github.com/contiv/vpp/plugins/netctl/remote"
-	"github.com/contiv/vpp/plugins/nodesync/vppnode"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/ligato/cn-infra/datasync"
 	"github.com/ligato/cn-infra/db/keyval"
-	//"strconv"
 
-	//"github.com/ligato/cn-infra/db/keyval/etcd"
 	"github.com/ligato/cn-infra/infra"
 	"github.com/ligato/cn-infra/rpc/rest"
 	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
@@ -86,14 +87,14 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	//key := resp.GetKey()
 
 	//Getting ip
-	value := new(vppnode.VppNode)
+	value := &node.NodeInfo{}
 	changeType := resp.GetChangeType()
 	if changeType == datasync.Delete {
 		if prevValExist, err := resp.GetPrevValue(value); err != nil {
-			p.Log.Errorf("get value error: %v", err)
+			p.Log.Errorf("could not get prev value in Delete op, error: %s", err)
 			return
 		} else if !prevValExist {
-			p.Log.Errorf("Delete and Previous Value Does not Exist")
+			p.Log.Errorf("prev value does not exist in Delete op")
 			return
 		}
 	} else {
@@ -102,10 +103,9 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 			return
 		}
 	}
-	ip := value.IpAddresses[0]
+	ip := value.IpAddress
 	ipParts := strings.Split(ip, "/")
 	ip = ipParts[0]
-	//prefixlen, err := strconv.Atoi(ipParts[1])
 
 	client, err := remote.CreateHTTPClient("")
 	if err != nil {
@@ -120,17 +120,24 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 		return
 	}
 
-	ipam := ipv4net.IPAMData{}
+	ipam := telemetrymodel.IPamEntry{}
 	err = json.Unmarshal(b, &ipam)
 	if err != nil {
-		p.Log.Errorf("unmarshal error: %v", err)
+		p.Log.Errorf("failed to unmarshal IpamEntry, error: %s, buffer: %+v", err, b)
 		return
 	}
 
 	//Setting Route info
+	podSubnetParts := strings.Split(ipam.PodNetwork, "/")
+	prefixLen, err := strconv.ParseUint(podSubnetParts[1], 10, 32)
+	if err != nil {
+		p.Log.Errorf("failed to convert pod subnet mask %s on node %d to uint, error %s",
+			ipam.PodNetwork, value.Id, err)
+		return
+	}
 	nlri, _ := ptypes.MarshalAny(&bgp_api.IPAddressPrefix{
-		Prefix:    ipam.PodSubnetThisNode,
-		PrefixLen: 24,
+		Prefix:    podSubnetParts[0],
+		PrefixLen: uint32(prefixLen),
 	})
 
 	a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
