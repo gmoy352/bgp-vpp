@@ -33,6 +33,7 @@ import (
 type BgpPlugin struct {
 	Deps
 	watchCloser chan string
+	nlriMap     map[uint32]*any.Any
 }
 
 //Deps is only for external dependencies
@@ -73,6 +74,7 @@ func (p *BgpPlugin) Init() error {
 		return err
 
 	}
+	p.nlriMap = make(map[uint32]*any.Any)
 	return nil
 }
 func (p *BgpPlugin) Close() error {
@@ -104,53 +106,54 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 		}
 	}
 	ip := value.IpAddress
+	id := value.Id
 	ipParts := strings.Split(ip, "/")
 	ip = ipParts[0]
 
-	client, err := remote.CreateHTTPClient("")
-	if err != nil {
-		p.Log.Error("create http client error: %v", err)
-		return
-	}
-
-	//Getting Ipam Info
-	b, err := getNodeInfo(client, ip, getIpamDataCmd)
-	if err != nil {
-		p.Log.Errorf("getnodeinfo error: %v", err)
-		return
-	}
-
-	ipam := telemetrymodel.IPamEntry{}
-	err = json.Unmarshal(b, &ipam)
-	if err != nil {
-		p.Log.Errorf("failed to unmarshal IpamEntry, error: %s, buffer: %+v", err, b)
-		return
-	}
-
-	//Setting Route info
-	podSubnetParts := strings.Split(ipam.PodNetwork, "/")
-	prefixLen, err := strconv.ParseUint(podSubnetParts[1], 10, 32)
-	if err != nil {
-		p.Log.Errorf("failed to convert pod subnet mask %s on node %d to uint, error %s",
-			ipam.PodNetwork, value.Id, err)
-		return
-	}
-	nlri, _ := ptypes.MarshalAny(&bgp_api.IPAddressPrefix{
-		Prefix:    podSubnetParts[0],
-		PrefixLen: uint32(prefixLen),
-	})
-
-	a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
-		Origin: 0,
-	})
-	a2, _ := ptypes.MarshalAny(&bgp_api.NextHopAttribute{
-		NextHop: ip,
-	})
-	attrs := []*any.Any{a1, a2}
 	switch changeType {
 	case datasync.Put:
+		client, err := remote.CreateHTTPClient("")
+		if err != nil {
+			p.Log.Error("create http client error: %v", err)
+			return
+		}
+
+		//Getting Ipam Info
+		b, err := getNodeInfo(client, ip, getIpamDataCmd)
+		if err != nil {
+			p.Log.Errorf("getnodeinfo error: %v", err)
+			return
+		}
+
+		ipam := telemetrymodel.IPamEntry{}
+		err = json.Unmarshal(b, &ipam)
+		if err != nil {
+			p.Log.Errorf("failed to unmarshal IpamEntry, error: %s, buffer: %+v", err, b)
+			return
+		}
+
+		//Setting Route info
+		podSubnetParts := strings.Split(ipam.PodNetwork, "/")
+		prefixLen, err := strconv.ParseUint(podSubnetParts[1], 10, 32)
+		if err != nil {
+			p.Log.Errorf("failed to convert pod subnet mask %s on node %d to uint, error %s",
+				ipam.PodNetwork, value.Id, err)
+			return
+		}
+		nlri, _ := ptypes.MarshalAny(&bgp_api.IPAddressPrefix{
+			Prefix:    podSubnetParts[0],
+			PrefixLen: uint32(prefixLen),
+		})
+
+		a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
+			Origin: 0,
+		})
+		a2, _ := ptypes.MarshalAny(&bgp_api.NextHopAttribute{
+			NextHop: ip,
+		})
+		attrs := []*any.Any{a1, a2}
 		p.Log.Infof("Put operation with NLRI: %v and Next Hop: %v", nlri, ip)
-		_, err := p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
+		_, err = p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
 			Path: &bgp_api.Path{
 				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
 				Nlri:   nlri,
@@ -160,7 +163,16 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 		if err != nil {
 			p.Log.Errorf("AddPath: %v", err)
 		}
+		p.nlriMap[id] = nlri
 	case datasync.Delete:
+		nlri := p.nlriMap[id]
+		a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
+			Origin: 0,
+		})
+		a2, _ := ptypes.MarshalAny(&bgp_api.NextHopAttribute{
+			NextHop: ip,
+		})
+		attrs := []*any.Any{a1, a2}
 		p.Log.Infof("Deleting Path with NLRI: %v", nlri)
 		err := p.Deps.BGPServer.DeletePath(context.Background(), &bgp_api.DeletePathRequest{
 			Path: &bgp_api.Path{
