@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"github.com/contiv/bgp-vpp/plugins/bgp/descriptor"
 	"strconv"
-
+	"github.com/contiv/vpp/plugins/ksr/model/node"
 	"github.com/contiv/vpp/plugins/netctl/remote"
-	node "github.com/contiv/vpp/plugins/nodesync/vppnode"
+	vppnode "github.com/contiv/vpp/plugins/nodesync/vppnode"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/ligato/cn-infra/datasync"
@@ -47,7 +47,7 @@ type Deps struct {
 
 const nodePrefix = "/vnf-agent/contiv-ksr/allocatedIDs/"
 const getIpamDataCmd = "contiv/v1/ipam"
-
+const nodePrefixTwo = "/vnf-agent/contiv-ksr/k8s/node/"
 func (p *BgpPlugin) String() string {
 	return "Starting BgpPlugin Application"
 }
@@ -91,7 +91,7 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	//key := resp.GetKey()
 
 	//Getting ip
-	value := &node.VppNode{}
+	value := &vppnode.VppNode{}
 	changeType := resp.GetChangeType()
 	if changeType == datasync.Delete {
 		if prevValExist, err := resp.GetPrevValue(value); err != nil {
@@ -116,16 +116,34 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 	ipParts := strings.Split(ip, "/")
 	ip = ipParts[0]
 
+
 	switch changeType {
 	case datasync.Put:
-		client, err := remote.CreateHTTPClient("")
+		nodeName := value.Name
+		broker := p.KVStore.NewBroker(nodePrefixTwo )
+		ni := &node.Node{}
+		broker.GetValue(nodeName,ni )
+		var mgmtAddr string
+		p.Log.Infof("%v\n",ni)
+		for _, address := range ni.Addresses {
+			if address.Type == node.NodeAddress_NodeInternalIP ||
+				address.Type == node.NodeAddress_NodeExternalIP{
+				mgmtAddr = address.Address
+				break
+			}
+		}
+		if mgmtAddr == "" {
+			p.Log.Errorf("Could not find internal ip of %v in %v",nodeName, nodePrefix+nodeName )
+			return
+		}
+		client, err := remote.CreateHTTPClient("../../cmd/bgp/http.client.conf")
 		if err != nil {
 			p.Log.Error("create http client error: %v", err)
 			return
 		}
 
 		//Getting Ipam Info
-		b, err := getNodeInfo(client, ip, getIpamDataCmd)
+		b, err := getNodeInfo(client, mgmtAddr, getIpamDataCmd)
 		if err != nil {
 			p.Log.Errorf("getnodeinfo error: %v", err)
 			return
@@ -136,7 +154,7 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 			p.Log.Errorf("failed to unmarshal IpamEntry, error: %s, buffer: %+v", err, b)
 			return
 		}
-
+		p.Log.Infof("THIS IS WHAT WE GET BACK FROM UNMARSHAL %v \n",  ipam.Config.PodSubnetCIDR)
 		//Setting Route info
 		podSubnetParts := strings.Split(ipam.Config.PodSubnetCIDR, "/")
 		prefixLen, err := strconv.ParseUint(podSubnetParts[1], 10, 32)
@@ -145,11 +163,12 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 				ipam.Config.PodSubnetCIDR, value.Id, err)
 			return
 		}
+		p.Log.Infof("PREFIX: %s, ", podSubnetParts[0])
+		p.Log.Infof("PREFIXLEN: %s, ",uint32(prefixLen) )
 		nlri, _ := ptypes.MarshalAny(&bgp_api.IPAddressPrefix{
 			Prefix:    podSubnetParts[0],
 			PrefixLen: uint32(prefixLen),
 		})
-
 		a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
 			Origin: 0,
 		})
@@ -201,13 +220,11 @@ func getNodeInfo(client *remote.HTTPClient, base string, cmd string) ([]byte, er
 	res, err := client.Get(base, cmd)
 	if err != nil {
 		err := fmt.Errorf("getNodeInfo: url: %s Get Error: %s", cmd, err.Error())
-		fmt.Printf("http get error: %s ", err.Error())
 		return nil, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		err := fmt.Errorf("getNodeInfo: url: %s HTTP res.Status: %s", cmd, res.Status)
-		fmt.Printf("http get error: %s ", err.Error())
 		return nil, err
 	}
 
