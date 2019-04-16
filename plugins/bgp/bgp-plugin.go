@@ -10,21 +10,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/contiv/bgp-vpp/plugins/bgp/descriptor"
-	"strconv"
+	"github.com/contiv/vpp/plugins/ipnet/restapi"
 	"github.com/contiv/vpp/plugins/ksr/model/node"
 	"github.com/contiv/vpp/plugins/netctl/remote"
-	vppnode "github.com/contiv/vpp/plugins/nodesync/vppnode"
+	"github.com/contiv/vpp/plugins/nodesync/vppnode"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/ligato/cn-infra/datasync"
 	"github.com/ligato/cn-infra/db/keyval"
-	"github.com/contiv/vpp/plugins/ipnet/restapi"
 	"github.com/ligato/cn-infra/infra"
 	"github.com/ligato/cn-infra/rpc/rest"
 	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
 	bgp_api "github.com/osrg/gobgp/api"
 	gobgp "github.com/osrg/gobgp/pkg/server"
 	"io/ioutil"
+	"strconv"
 	"strings"
 )
 
@@ -122,104 +122,111 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 
 	switch changeType {
 	case datasync.Put:
-		nodeName := value.Name
-		broker := p.KVStore.NewBroker(nodePrefixTwo )
-		ni := &node.Node{}
-		broker.GetValue(nodeName,ni )
-		var mgmtAddr string
-		p.Log.Infof("%v\n",ni)
-		for _, address := range ni.Addresses {
-			if address.Type == node.NodeAddress_NodeInternalIP ||
-				address.Type == node.NodeAddress_NodeExternalIP{
-				mgmtAddr = address.Address
-				break
-			}
-		}
-		if mgmtAddr == "" {
-			p.Log.Errorf("Could not find internal ip of %v in %v",nodeName, nodePrefix+nodeName )
-			return
-		}
-		client, err := remote.CreateHTTPClient("../../cmd/bgp/http.client.conf")
-		if err != nil {
-			p.Log.Error("create http client error: %v", err)
-			return
-		}
-
-		//Getting Ipam Info
-		b, err := getNodeInfo(client, mgmtAddr, getIpamDataCmd)
-		if err != nil {
-			p.Log.Errorf("getnodeinfo error: %v", err)
-			return
-		}
-		ipam := restapi.NodeIPAMInfo{}
-		err = json.Unmarshal(b, &ipam)
-		if err != nil {
-			p.Log.Errorf("failed to unmarshal IpamEntry, error: %s, buffer: %+v", err, b)
-			return
-		}
-		//Setting Route info
-		ip:= ipam.NodeIP
-		podSubnetParts := strings.Split(ipam.PodSubnetThisNode, "/")
-		prefixLen, err := strconv.ParseUint(podSubnetParts[1], 10, 32)
-		if err != nil {
-			p.Log.Errorf("failed to convert pod subnet mask %s on node %d to uint, error %s",
-				ipam.PodSubnetThisNode, value.Id, err)
-			return
-		}
-		p.Log.Infof("PREFIX: %s, ", podSubnetParts[0])
-		p.Log.Infof("PREFIXLEN: %d, ",uint32(prefixLen) )
-		nlri, _ := ptypes.MarshalAny(&bgp_api.IPAddressPrefix{
-			Prefix:    podSubnetParts[0],
-			PrefixLen: uint32(prefixLen),
-		})
-		a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
-			Origin: 0,
-		})
-		a2, _ := ptypes.MarshalAny(&bgp_api.NextHopAttribute{
-			NextHop: ip,
-		})
-		attrs := []*any.Any{a1, a2}
-		p.Log.Infof("Put operation with NLRI: %v and Next Hop: %v", nlri, ip)
-		_, err = p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
-			Path: &bgp_api.Path{
-				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
-				Nlri:   nlri,
-				Pattrs: attrs,
-			},
-		})
-		if err != nil {
-			p.Log.Errorf("AddPath: %v", err)
-		}
-		p.nlriMap[id] = nlri
-		p.nextHopMap[id]=ip
+		p.add(id, value.Name)
 	case datasync.Delete:
-		nlri := p.nlriMap[id]
-		ip := p.nextHopMap[id]
-
-		a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
-			Origin: 0,
-		})
-		a2, _ := ptypes.MarshalAny(&bgp_api.NextHopAttribute{
-			NextHop: ip,
-		})
-		attrs := []*any.Any{a1, a2}
-		p.Log.Infof("Deleting Path with NLRI: %v", nlri)
-		err := p.Deps.BGPServer.DeletePath(context.Background(), &bgp_api.DeletePathRequest{
-			Path: &bgp_api.Path{
-				Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
-				Nlri:   nlri,
-				Pattrs: attrs,
-			},
-		})
-		if err != nil {
-			p.Log.Errorf("AddPath: %v", err)
-		}
-		delete(p.nlriMap, id)
-		delete(p.nextHopMap, id)
+		p.delete(id)
 	default:
 		p.Log.Errorf("GetChangeType: %v", changeType)
 	}
 
+}
+
+func(p *BgpPlugin)add(id uint32, nodeName string) {
+	broker := p.KVStore.NewBroker(nodePrefixTwo )
+	ni := &node.Node{}
+	broker.GetValue(nodeName,ni )
+	var mgmtAddr string
+	p.Log.Infof("%v\n",ni)
+	for _, address := range ni.Addresses {
+		if address.Type == node.NodeAddress_NodeInternalIP ||
+			address.Type == node.NodeAddress_NodeExternalIP{
+			mgmtAddr = address.Address
+			break
+		}
+	}
+	if mgmtAddr == "" {
+		p.Log.Errorf("Could not find internal ip of %v in %v",nodeName, nodePrefix+nodeName )
+		return
+	}
+	client, err := remote.CreateHTTPClient("../../cmd/bgp/http.client.conf")
+	if err != nil {
+		p.Log.Error("create http client error: %v", err)
+		return
+	}
+
+	//Getting Ipam Info
+	b, err := getNodeInfo(client, mgmtAddr, getIpamDataCmd)
+	if err != nil {
+		p.Log.Errorf("getnodeinfo error: %v", err)
+		return
+	}
+	ipam := restapi.NodeIPAMInfo{}
+	err = json.Unmarshal(b, &ipam)
+	if err != nil {
+		p.Log.Errorf("failed to unmarshal IpamEntry, error: %s, buffer: %+v", err, b)
+		return
+	}
+	//Setting Route info
+	ip:= ipam.NodeIP
+	podSubnetParts := strings.Split(ipam.PodSubnetThisNode, "/")
+	prefixLen, err := strconv.ParseUint(podSubnetParts[1], 10, 32)
+	if err != nil {
+		p.Log.Errorf("failed to convert pod subnet mask %s on node %d to uint, error %s",
+			ipam.PodSubnetThisNode, id, err)
+		return
+	}
+	p.Log.Infof("PREFIX: %s, ", podSubnetParts[0])
+	p.Log.Infof("PREFIXLEN: %d, ",uint32(prefixLen) )
+	nlri, _ := ptypes.MarshalAny(&bgp_api.IPAddressPrefix{
+		Prefix:    podSubnetParts[0],
+		PrefixLen: uint32(prefixLen),
+	})
+	a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
+		Origin: 0,
+	})
+	a2, _ := ptypes.MarshalAny(&bgp_api.NextHopAttribute{
+		NextHop: ip,
+	})
+	attrs := []*any.Any{a1, a2}
+	p.Log.Infof("Put operation with NLRI: %v and Next Hop: %v", nlri, ip)
+	_, err = p.Deps.BGPServer.AddPath(context.Background(), &bgp_api.AddPathRequest{
+		Path: &bgp_api.Path{
+			Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
+			Nlri:   nlri,
+			Pattrs: attrs,
+		},
+	})
+	if err != nil {
+		p.Log.Errorf("AddPath: %v", err)
+	}
+	p.nlriMap[id] = nlri
+	p.nextHopMap[id]=ip
+}
+
+func(p *BgpPlugin)delete(id uint32) {
+	nlri := p.nlriMap[id]
+	ip := p.nextHopMap[id]
+
+	a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
+		Origin: 0,
+	})
+	a2, _ := ptypes.MarshalAny(&bgp_api.NextHopAttribute{
+		NextHop: ip,
+	})
+	attrs := []*any.Any{a1, a2}
+	p.Log.Infof("Deleting Path with NLRI: %v", nlri)
+	err := p.Deps.BGPServer.DeletePath(context.Background(), &bgp_api.DeletePathRequest{
+		Path: &bgp_api.Path{
+			Family: &bgp_api.Family{Afi: bgp_api.Family_AFI_IP, Safi: bgp_api.Family_SAFI_UNICAST},
+			Nlri:   nlri,
+			Pattrs: attrs,
+		},
+	})
+	if err != nil {
+		p.Log.Errorf("AddPath: %v", err)
+	}
+	delete(p.nlriMap, id)
+	delete(p.nextHopMap, id)
 }
 
 // getNodeInfo will make an http request for the given command and return an indented slice of bytes.
