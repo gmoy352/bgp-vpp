@@ -32,6 +32,7 @@ type BgpPlugin struct {
 	Deps
 	watchCloser chan string
 	nlriMap     map[uint32]*any.Any
+	nextHopMap map[uint32]string
 }
 
 //Deps is only for external dependencies
@@ -75,6 +76,7 @@ func (p *BgpPlugin) Init() error {
 
 	}
 	p.nlriMap = make(map[uint32]*any.Any)
+	p.nextHopMap = make(map[uint32]string)
 	p.Log.Info("BGP Plugin initialized")
 	return nil
 }
@@ -111,10 +113,11 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 		p.Log.Warnf("no IP address available for node %v", value.Id)
 		return
 	}
-	ip := value.IpAddresses[0]
+
+	//ip := value.IpAddresses[0]
 	id := value.Id
-	ipParts := strings.Split(ip, "/")
-	ip = ipParts[0]
+	//ipParts := strings.Split(ip, "/")
+	//ip = ipParts[0]
 
 
 	switch changeType {
@@ -154,17 +157,17 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 			p.Log.Errorf("failed to unmarshal IpamEntry, error: %s, buffer: %+v", err, b)
 			return
 		}
-		p.Log.Infof("THIS IS WHAT WE GET BACK FROM UNMARSHAL %v \n",  ipam.Config.PodSubnetCIDR)
 		//Setting Route info
-		podSubnetParts := strings.Split(ipam.Config.PodSubnetCIDR, "/")
+		ip:= ipam.NodeIP
+		podSubnetParts := strings.Split(ipam.PodSubnetThisNode, "/")
 		prefixLen, err := strconv.ParseUint(podSubnetParts[1], 10, 32)
 		if err != nil {
 			p.Log.Errorf("failed to convert pod subnet mask %s on node %d to uint, error %s",
-				ipam.Config.PodSubnetCIDR, value.Id, err)
+				ipam.PodSubnetThisNode, value.Id, err)
 			return
 		}
 		p.Log.Infof("PREFIX: %s, ", podSubnetParts[0])
-		p.Log.Infof("PREFIXLEN: %s, ",uint32(prefixLen) )
+		p.Log.Infof("PREFIXLEN: %d, ",uint32(prefixLen) )
 		nlri, _ := ptypes.MarshalAny(&bgp_api.IPAddressPrefix{
 			Prefix:    podSubnetParts[0],
 			PrefixLen: uint32(prefixLen),
@@ -188,8 +191,11 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 			p.Log.Errorf("AddPath: %v", err)
 		}
 		p.nlriMap[id] = nlri
+		p.nextHopMap[id]=ip
 	case datasync.Delete:
 		nlri := p.nlriMap[id]
+		ip := p.nextHopMap[id]
+
 		a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
 			Origin: 0,
 		})
@@ -208,6 +214,8 @@ func (p *BgpPlugin) onChange(resp datasync.ProtoWatchResp) {
 		if err != nil {
 			p.Log.Errorf("AddPath: %v", err)
 		}
+		delete(p.nlriMap, id)
+		delete(p.nextHopMap, id)
 	default:
 		p.Log.Errorf("GetChangeType: %v", changeType)
 	}
