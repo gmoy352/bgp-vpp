@@ -33,6 +33,7 @@ type BgpPlugin struct {
 	watchCloser chan string
 	nlriMap     map[uint32]*any.Any
 	nextHopMap map[uint32]string
+	//hasConfig chan bool
 }
 
 //Deps is only for external dependencies
@@ -57,26 +58,25 @@ func (p *BgpPlugin) Init() error {
 		p.BGPServer = gobgp.NewBgpServer()
 		go p.BGPServer.Serve()
 	}
+	p.nlriMap = make(map[uint32]*any.Any)
+	p.nextHopMap = make(map[uint32]string)
+	//p.hasConfig = make(chan bool)
 
-	// register descriptor for bgp global config
 	gd := descriptor.NewGlobalConfDescriptor(p.Log, p.BGPServer)
 	p.KVScheduler.RegisterKVDescriptor(gd)
-
 	// register descriptor for bgp peer config
 
 	pd := descriptor.NewPeerConfDescriptor(p.Log, p.BGPServer)
 	p.KVScheduler.RegisterKVDescriptor(pd)
-
 	p.watchCloser = make(chan string)
 	watcher := p.Deps.KVStore.NewWatcher(nodePrefix)
-	err := watcher.Watch(p.onChange, p.watchCloser, "1")
+	err := watcher.Watch(p.onChange, p.watchCloser, "")
 	if err != nil {
 		p.Log.Errorf("Failed to start the node watcher, error %s", err)
 		return err
 
 	}
-	p.nlriMap = make(map[uint32]*any.Any)
-	p.nextHopMap = make(map[uint32]string)
+
 	p.Log.Info("BGP Plugin initialized")
 	return nil
 }
@@ -206,7 +206,10 @@ func(p *BgpPlugin)add(id uint32, nodeName string) {
 func(p *BgpPlugin)delete(id uint32) {
 	nlri := p.nlriMap[id]
 	ip := p.nextHopMap[id]
-
+	if nlri == nil || ip == "" {
+		p.Log.Error("Node with id %d has not yet been added",id)
+		return
+	}
 	a1, _ := ptypes.MarshalAny(&bgp_api.OriginAttribute{
 		Origin: 0,
 	})
